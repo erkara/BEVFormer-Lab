@@ -1,11 +1,6 @@
-# ---------------------------------------------
-# Copyright (c) OpenMMLab. All rights reserved.
-# ---------------------------------------------
-# Modified by Zhiqi Li
-# Modernized locally for MMCV 2 / MMEngine / MMDet3D 1.x compatibility.
-# ---------------------------------------------
+import warnings
+warnings.filterwarnings("ignore")
 import argparse
-import copy
 import math
 import os
 import os.path as osp
@@ -18,15 +13,13 @@ from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import mmcv
 import numpy as np
 import torch
 from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon, Rectangle
 from mmengine.config import Config, DictAction
-from mmengine.fileio import dump, load
-from mmengine.registry import build_from_cfg, init_default_scope
-from mmengine.runner import load_checkpoint
+from mmengine.fileio import dump
+from mmengine.registry import init_default_scope
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -34,143 +27,16 @@ import mmdet.models  # noqa: F401,E402
 import mmdet3d.models  # noqa: F401,E402
 import projects.mmdet3d_plugin  # noqa: F401,E402
 from mmdet.registry import MODELS as MMDET_MODELS  # noqa: E402
-from mmdet3d.registry import DATASETS, TRANSFORMS  # noqa: E402
-
-
-DEFAULT_DATA_ROOT = 'data/nuscenes/'
-DEFAULT_VAL_INFO = 'data/nuscenes/nuscenes_infos_temporal_val.pkl'
-
-
-class SimpleDataContainer:
-    def __init__(self, data, stack=False, padding_value=0, cpu_only=False):
-        self.data = data
-        self._data = data
-        self.stack = stack
-        self.padding_value = padding_value
-        self.cpu_only = cpu_only
-
-
-def make_data_container(data, **kwargs):
-    try:
-        from mmcv.parallel import DataContainer as DC
-        return DC(data, **kwargs)
-    except Exception:
-        return SimpleDataContainer(data, **kwargs)
-
-
-def is_datacontainer(value):
-    return hasattr(value, 'data') and (
-        hasattr(value, 'cpu_only') or hasattr(value, 'stack') or hasattr(value, 'padding_value'))
-
-
-def unwrap_datacontainer(value):
-    if is_datacontainer(value):
-        if hasattr(value, '_data'):
-            return value._data
-        return value.data
-    return value
-
-
-def register_runtime_compat_transforms():
-    @TRANSFORMS.register_module(name='LoadMultiViewImageFromFiles', force=True)
-    class LoadMultiViewImageFromFilesCompat:
-        def __init__(self, to_float32=False, color_type='color', *args, **kwargs):
-            self.to_float32 = to_float32
-            self.color_type = color_type
-
-        def __call__(self, results):
-            filenames = results.get('img_filename') or results.get('filename')
-            if filenames is None:
-                raise KeyError('LoadMultiViewImageFromFilesCompat expected img_filename or filename')
-            imgs = [mmcv.imread(name, self.color_type) for name in filenames]
-            if self.to_float32:
-                imgs = [img.astype(np.float32) for img in imgs]
-            results['filename'] = filenames
-            results['img'] = imgs
-            results['img_shape'] = [img.shape for img in imgs]
-            results['ori_shape'] = [img.shape for img in imgs]
-            results['pad_shape'] = [img.shape for img in imgs]
-            num_channels = 1 if imgs[0].ndim < 3 else imgs[0].shape[2]
-            results['img_norm_cfg'] = dict(
-                mean=np.zeros(num_channels, dtype=np.float32),
-                std=np.ones(num_channels, dtype=np.float32),
-                to_rgb=False,
-            )
-            return results
-
-    @TRANSFORMS.register_module(name='DefaultFormatBundle3D', force=True)
-    class DefaultFormatBundle3DCompat:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def __call__(self, results):
-            if 'img' in results and isinstance(results['img'], list):
-                imgs = [np.ascontiguousarray(img.transpose(2, 0, 1)) for img in results['img']]
-                results['img'] = make_data_container(
-                    torch.stack([torch.from_numpy(img) for img in imgs]), stack=True)
-            if 'gt_labels_3d' in results and not torch.is_tensor(results['gt_labels_3d']):
-                results['gt_labels_3d'] = make_data_container(torch.as_tensor(results['gt_labels_3d']))
-            if 'gt_bboxes_3d' in results:
-                results['gt_bboxes_3d'] = make_data_container(results['gt_bboxes_3d'], cpu_only=True)
-            return results
-
-
-def apply_config_fixes(cfg):
-    cfg.model.pop('pretrained', None)
-    cfg.model.img_backbone.type = 'mmdet.ResNet'
-    cfg.model.img_neck.type = 'mmdet.FPN'
-    cfg.model.pts_bbox_head.type = 'mmdet.BEVFormerHead'
-    cfg.model.train_cfg = None
-
-
-def configure_test_dataset(cfg):
-    test_cfg = copy.deepcopy(cfg.data.test)
-    test_cfg.data_root = DEFAULT_DATA_ROOT
-    test_cfg.ann_file = str(Path(DEFAULT_VAL_INFO).resolve())
-    test_cfg.test_mode = True
-    test_cfg.lazy_init = True
-    test_cfg.pop('samples_per_gpu', None)
-    test_cfg.pop('classes', None)
-    return test_cfg
-
-
-def attach_legacy_infos(dataset, ann_file):
-    annotations = load(ann_file)
-    infos = annotations.get('infos', annotations if isinstance(annotations, list) else None)
-    if infos is None:
-        raise KeyError('legacy annotation file does not contain infos')
-    dataset.data_infos = infos
-    dataset.data_list = infos
-    dataset._fully_initialized = True
-    dataset.serialize_data = False
-    if not hasattr(dataset, 'show_ins_var'):
-        dataset.show_ins_var = False
-    if not hasattr(dataset, 'prepare_test_data'):
-        dataset.prepare_test_data = dataset.prepare_data
-    metadata = annotations.get('metadata', {}) if isinstance(annotations, dict) else {}
-    if 'version' in metadata:
-        dataset.version = metadata['version']
-    return metadata
-
-
-def build_dataset(test_cfg):
-    try:
-        return DATASETS.build(test_cfg)
-    except Exception as exc:
-        print('DATASETS.build failed; falling back to build_from_cfg')
-        print(f'fallback reason: {type(exc).__name__}: {exc}')
-        return build_from_cfg(test_cfg, DATASETS)
-
-
-def choose_device():
-    if not torch.cuda.is_available():
-        return torch.device('cpu'), 'torch.cuda.is_available() is false'
-    try:
-        torch.empty(1, device='cuda')
-        return torch.device('cuda'), 'CUDA is available and a test allocation succeeded'
-    except Exception as exc:
-        return torch.device('cpu'), f'CUDA test allocation failed: {type(exc).__name__}: {exc}'
-
+from projects.mmdet3d_plugin.modern_compat import (  # noqa: E402
+    apply_config_fixes,
+    attach_legacy_infos,
+    build_dataset,
+    choose_device,
+    configure_test_dataset,
+    load_checkpoint_modern,
+    register_runtime_compat_transforms,
+    unwrap_datacontainer,
+)
 
 def get_primary_item(item):
     if isinstance(item, list) and len(item) == 1 and isinstance(item[0], dict):
@@ -364,27 +230,6 @@ def save_bev_visualization(output, dataset, dataset_index, metadata_dict, cfg, a
     plt.close(fig)
     print(f'saved visualization: {out_path}')
     return out_path
-
-
-def load_checkpoint_modern(model, checkpoint_path):
-    try:
-        checkpoint = load_checkpoint(
-            model, checkpoint_path, map_location='cpu', strict=False, logger=None)
-        print('checkpoint load method: mmengine.runner.load_checkpoint')
-        return checkpoint
-    except Exception:
-        print('mmengine.runner.load_checkpoint failed; trying torch.load fallback')
-        traceback.print_exc()
-        raw = torch.load(checkpoint_path, map_location='cpu')
-        if isinstance(raw, dict):
-            state_dict = raw.get('state_dict') or raw.get('model') or raw.get('model_state_dict') or raw
-        else:
-            state_dict = raw
-        incompatible = model.load_state_dict(state_dict, strict=False)
-        print('checkpoint load method: torch.load + model.load_state_dict(strict=False)')
-        print(f'missing_keys: {list(incompatible.missing_keys)}')
-        print(f'unexpected_keys: {list(incompatible.unexpected_keys)}')
-        return raw if isinstance(raw, dict) else {}
 
 
 def parse_args():

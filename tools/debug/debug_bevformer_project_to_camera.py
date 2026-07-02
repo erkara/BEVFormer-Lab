@@ -15,10 +15,10 @@ from matplotlib.patches import Polygon, Rectangle
 from mmengine.config import Config
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.debug_bevformer_checkpoint_load import run_full_forward  # noqa: E402
-from tools.debug_bevformer_visualize_bev_with_gt import (  # noqa: E402
+from tools.debug.debug_bevformer_checkpoint_load import run_full_forward  # noqa: E402
+from tools.debug.debug_bevformer_visualize_bev_with_gt import (  # noqa: E402
     DEFAULT_CHECKPOINT,
     build_model_and_load,
     box_corners_bev,
@@ -28,7 +28,7 @@ from tools.debug_bevformer_visualize_bev_with_gt import (  # noqa: E402
     prepare_sample,
     select_predictions,
 )
-from tools.debug_nuscenes_real_full_forward import (  # noqa: E402
+from tools.debug.debug_nuscenes_real_full_forward import (  # noqa: E402
     CONFIG_PATH,
     apply_config_fixes,
     choose_device,

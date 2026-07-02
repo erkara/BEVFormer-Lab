@@ -6,7 +6,7 @@ from pathlib import Path
 
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from mmengine.config import Config
 
@@ -16,7 +16,7 @@ import projects.mmdet3d_plugin
 
 from mmdet.registry import MODELS as MMDET_MODELS
 from projects.mmdet3d_plugin.bevformer.modules.decoder import CustomMSDeformableAttention
-from tools.debug_bevformer_dummy_forward import (
+from tools.debug.debug_bevformer_dummy_forward import (
     CONFIG_PATH,
     IMAGE_H,
     IMAGE_W,

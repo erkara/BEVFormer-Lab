@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings("ignore")
 import argparse
 import csv
 import logging
@@ -7,24 +9,23 @@ import traceback
 from pathlib import Path
 
 import torch
-from mmengine.config import Config, DictAction
-from mmengine.registry import init_default_scope
+from mmengine.config import DictAction
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools.debug_train_bevformer_tiny_mini import (  # noqa: E402
+import mmdet.models  # noqa: F401,E402
+import mmdet3d.models  # noqa: F401,E402
+import projects.mmdet3d_plugin  # noqa: F401,E402
+from projects.mmdet3d_plugin.modern_compat import (  # noqa: E402
     CHECKPOINT_PATH,
-    apply_config_fixes,
-    attach_legacy_infos,
-    build_dataset,
-    build_model,
+    build_train_dataset,
+    build_train_model,
     choose_device,
-    configure_train_dataset,
+    initialize_modern_compat,
     parse_losses,
-    patch_legacy_assigner_and_sampler,
+    prepare_config,
     prepare_train_batch,
     print_header,
-    register_runtime_compat_transforms,
 )
 
 
@@ -158,10 +159,7 @@ def main():
     work_dir.mkdir(parents=True, exist_ok=True)
 
     print_header("load config")
-    cfg = Config.fromfile(args.config)
-    if args.cfg_options is not None:
-        cfg.merge_from_dict(args.cfg_options)
-    apply_config_fixes(cfg)
+    cfg = prepare_config(args.config, args.cfg_options)
     print(f"config: {args.config}")
     print("modern config fixes applied")
 
@@ -169,11 +167,8 @@ def main():
     cfg.dump(config_copy)
 
     print_header("build train dataset")
-    init_default_scope("mmdet3d")
-    register_runtime_compat_transforms()
-    train_cfg = configure_train_dataset(cfg)
-    dataset = build_dataset(train_cfg)
-    metadata = attach_legacy_infos(dataset, train_cfg.ann_file, list(cfg.class_names))
+    initialize_modern_compat()
+    dataset, metadata = build_train_dataset(cfg)
     subset_indices = list(range(min(args.num_samples, len(dataset))))
     if not subset_indices:
         raise RuntimeError("empty training subset")
@@ -187,8 +182,7 @@ def main():
     print(f"selected device: {device} ({device_reason})")
 
     print_header("build model")
-    model = build_model(cfg, args.checkpoint, args.no_checkpoint, device)
-    patch_legacy_assigner_and_sampler(model)
+    model = build_train_model(cfg, args.checkpoint, args.no_checkpoint, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
     optimizer.zero_grad(set_to_none=True)
     print(f"optimizer: AdamW lr={args.lr:g}")

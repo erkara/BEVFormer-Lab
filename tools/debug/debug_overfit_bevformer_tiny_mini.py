@@ -14,9 +14,12 @@ import torch
 from mmengine.config import Config
 from mmengine.registry import init_default_scope
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.debug_train_bevformer_tiny_mini import (  # noqa: E402
+import mmdet.models  # noqa: F401,E402
+import mmdet3d.models  # noqa: F401,E402
+import projects.mmdet3d_plugin  # noqa: F401,E402
+from projects.mmdet3d_plugin.modern_compat import (  # noqa: E402
     CHECKPOINT_PATH,
     CONFIG_PATH,
     apply_config_fixes,
