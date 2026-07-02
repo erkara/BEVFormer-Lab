@@ -14,13 +14,13 @@ from matplotlib.patches import Polygon, Rectangle
 from mmengine.config import Config
 from mmengine.registry import init_default_scope
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.debug_bevformer_checkpoint_load import (  # noqa: E402
+from tools.debug.debug_bevformer_checkpoint_load import (  # noqa: E402
     load_checkpoint_modern_safe,
     run_full_forward,
 )
-from tools.debug_nuscenes_real_full_forward import (  # noqa: E402
+from tools.debug.debug_nuscenes_real_full_forward import (  # noqa: E402
     CONFIG_PATH,
     choose_device,
     apply_config_fixes,

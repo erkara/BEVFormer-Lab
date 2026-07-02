@@ -11,17 +11,62 @@
 
 ## Current Working State
 
-The current compatibility patch is intentionally scoped to model construction and safe structural inspection.
+The modernized repo is now validated beyond import/model-build and synthetic
+forward probes. The current validated workflow is the single-GPU nuScenes-mini
+path documented in `GET_STARTED.md`.
 
-Working checks:
+Validated public workflow:
 
-- `import projects.mmdet3d_plugin` succeeds.
-- `projects/configs/bevformer/bevformer_tiny.py` loads with `mmengine.config.Config`.
-- The BEVFormer tiny model object builds through `mmdet.registry.MODELS.build`.
-- `model.init_weights()` succeeds in the smoke test.
-- Safe model metadata can be inspected.
-- Synthetic dummy image feature extraction succeeds through the image backbone and FPN.
-- Synthetic BEV encoder probing succeeds with `only_bev=True`.
+- `tools/create_data.py` converts nuScenes-mini and produces temporal train/val
+  info files plus mono3d COCO JSON files.
+- Converted nuScenes-mini counts are validated:
+  - train: 323 infos
+  - val: 81 infos
+- `tools/train.py` runs a single-GPU diagnostic/smoke training cycle on
+  nuScenes-mini with dataset loading, forward loss, backward pass, and optimizer
+  step.
+- `tools/test.py` loads `ckpts/bevformer_tiny_epoch_24.pth` and runs
+  small-subset inference on nuScenes-mini validation samples.
+- `tools/debug/trace_one_training_sample_shapes.py` traces one real training
+  sample through image features, BEV encoder, detection head, and loss.
+- Debug/developer tools now live under `tools/debug/`.
+- Compatibility helpers live under
+  `projects/mmdet3d_plugin/modern_compat/`.
+- `tools/dist_train.sh` and `tools/dist_test.sh` are unsupported stubs that fail
+  clearly instead of launching distributed jobs.
+
+Current validated commands:
+
+```bash
+python tools/create_data.py nuscenes \
+  --root-path ./data/nuscenes \
+  --out-dir ./data/nuscenes \
+  --extra-tag nuscenes \
+  --version v1.0-mini \
+  --canbus ./data
+```
+
+```bash
+python tools/train.py \
+  projects/configs/bevformer/bevformer_tiny.py \
+  --work-dir outputs/train_entrypoint_smoke \
+  --max-iters 5 \
+  --no-validate
+```
+
+```bash
+python tools/test.py \
+  projects/configs/bevformer/bevformer_tiny.py \
+  ckpts/bevformer_tiny_epoch_24.pth \
+  --max-samples 2 \
+  --out outputs/test_outputs/test_max2.pkl \
+  --show-dir outputs/test_outputs/vis \
+  --show-index 0
+```
+
+```bash
+python tools/debug/trace_one_training_sample_shapes.py
+```
 
 Summary status:
 
@@ -35,8 +80,29 @@ Summary status:
 | BEV encoder `only_bev` dummy forward | Passed |
 | Full `pts_bbox_head` dummy forward | Passed |
 | Decoder layout bug | Fixed permanently by setting decoder `CustomMSDeformableAttention.batch_first=False` |
-| Full detector `model.forward(return_loss=False)` on synthetic input | Fails later with synthetic metadata/input nesting shape issue |
-| Real nuScenes / checkpoint / real inference / training / evaluation | Not tested |
+| nuScenes-mini conversion | Passed; 323 train infos, 81 val infos |
+| Single-GPU diagnostic training | Passed; dataset load, forward loss, backward, optimizer step |
+| Checkpoint loading | Passed with `ckpts/bevformer_tiny_epoch_24.pth` |
+| Single-GPU small-subset inference | Passed with `tools/test.py` |
+| Shape tracing on real training sample | Passed with `tools/debug/trace_one_training_sample_shapes.py` |
+| `tools/train.py` validation loop | Not ported; use `--no-validate` |
+| Distributed train/test | Unsupported; wrapper scripts are explicit failing stubs |
+| Full nuScenes trainval training | Not validated |
+| Official nuScenes metric reproduction | Not claimed |
+
+Current limitations:
+
+- The validated train/test path is single-GPU.
+- `tools/train.py` is diagnostic/smoke-training oriented, not an official full
+  training reproduction.
+- The validation loop in `tools/train.py` is not ported; use `--no-validate`.
+- Distributed train/test is unsupported.
+- Full nuScenes trainval training is not validated.
+- Official metric reproduction is not claimed.
+- Generated outputs and checkpoints should not be committed.
+
+Earlier synthetic-forward diagnostics are retained below as historical porting
+notes. They no longer define the current validated repo state.
 
 Observed smoke-test metadata:
 
@@ -54,7 +120,7 @@ Observed smoke-test metadata:
 
 Current script:
 
-- `tools/debug_bevformer_dummy_forward.py`
+- `tools/debug/debug_bevformer_dummy_forward.py`
 
 What it does:
 
@@ -77,28 +143,24 @@ Results:
 - Failure location: `projects/mmdet3d_plugin/bevformer/modules/decoder.py:331`.
 - Failure reason: assertion that `spatial_shapes` product equals `num_value`.
 
-Interpretation:
+Historical interpretation:
 
-- The repo is now beyond model construction.
-- Backbone, FPN, transformer entry path, and BEV encoder can execute on synthetic input.
-- Full detection head decoding is not yet working.
-- The current blocker is likely synthetic feature/metadata shape consistency for decoder cross-attention, not basic import/model construction.
+- At this early synthetic-only stage, the repo had moved beyond model construction.
+- Backbone, FPN, transformer entry path, and BEV encoder could execute on synthetic input.
+- Full detection head decoding was not yet working in this probe.
+- This blocker was later resolved by the decoder layout patch and superseded by real nuScenes-mini inference and diagnostic training.
 
-Remaining limitations:
+Historical limitations for this early dummy probe:
 
-- No real nuScenes sample yet.
-- No checkpoint loading.
-- No real inference.
-- No training.
-- No evaluation.
-- Full decoder/head forward still fails.
-- Synthetic dummy input may not match the exact feature flattening expected by BEVFormer decoder.
+- This probe used synthetic inputs only and was superseded by later real-data validations.
+- The decoder/head failure was resolved by the decoder layout patch.
+- Real nuScenes-mini conversion, checkpoint loading, inference, diagnostic training, and shape tracing are validated in later sections.
 
 ## Decoder Shape Diagnostic
 
 Script:
 
-- `tools/debug_bevformer_decoder_shapes.py`
+- `tools/debug/debug_bevformer_decoder_shapes.py`
 
 What it does:
 
@@ -136,15 +198,15 @@ Interpretation:
 - Therefore it incorrectly reads `num_value` as `1` instead of `2500`.
 - This looks like a model-porting tensor-layout issue, not a basic model construction issue and not necessarily a dummy-input issue.
 
-Remaining blocker:
+Historical blocker:
 
-- Decide whether the minimal compatibility fix should set decoder `CustomMSDeformableAttention` `batch_first=False` or transpose query/value tensors before decoder cross-attention.
+- This was resolved by setting decoder `CustomMSDeformableAttention.batch_first=False` for the sequence-first decoder path.
 
 ## Decoder Layout Runtime-Fix Diagnostic
 
 Script:
 
-- `tools/debug_bevformer_decoder_layout_fix.py`
+- `tools/debug/debug_bevformer_decoder_layout_fix.py`
 
 What it does:
 
@@ -180,9 +242,9 @@ Recommendation:
 - Experiment B: transpose tensors around the existing `batch_first=True` attention call.
 - Experiment A is the preferred minimal code patch because the surrounding decoder path already uses sequence-first layout `(N, B, C)`: `query=(900, 1, 256)` and `value=(2500, 1, 256)`. Setting decoder `CustomMSDeformableAttention` to `batch_first=False` matches that existing contract with less wrapper logic than transposing tensors around every cross-attention call.
 
-Remaining blocker:
+Historical blocker:
 
-- Apply and verify the minimal permanent compatibility fix for decoder cross-attention layout, then rerun the dummy forward gates.
+- Resolved by the permanent decoder layout patch and subsequent dummy, real inference, and diagnostic training validations.
 
 ## Permanent Decoder Layout Patch
 
@@ -195,7 +257,7 @@ Patch applied:
 Verification commands and outputs:
 
 ```bash
-python tools/debug_build_bevformer_tiny.py
+python tools/debug/debug_build_bevformer_tiny.py
 ```
 
 ```text
@@ -204,7 +266,7 @@ model built
 ```
 
 ```bash
-python tools/debug_bevformer_smoke.py
+python tools/debug/debug_bevformer_smoke.py
 ```
 
 ```text
@@ -222,7 +284,7 @@ smoke test passed
 ```
 
 ```bash
-python tools/debug_bevformer_dummy_forward.py
+python tools/debug/debug_bevformer_dummy_forward.py
 ```
 
 Key output:
@@ -264,15 +326,13 @@ Interpretation:
 
 - The permanent decoder layout patch resolves the previous `spatial_shapes` assertion in `CustomMSDeformableAttention`.
 - Full staged `pts_bbox_head` dummy forward now passes without runtime monkey-patching.
-- The remaining failure in `tools/debug_bevformer_dummy_forward.py` is later, inside full detector `forward_test`, due to synthetic metadata/image nesting shape consistency. It is not the decoder `batch_first`/`value` layout blocker.
+- The remaining failure in `tools/debug/debug_bevformer_dummy_forward.py` was limited to the synthetic full-detector `forward_test` packing path. Later real nuScenes-mini inference through `tools/test.py` passed with the verified OpenMMLab test-time packing.
 
-Remaining limitations:
+Historical limitations at this point in the port:
 
-- No real nuScenes sample has been used.
-- No checkpoint has been loaded.
-- No real inference has been run.
-- No training or evaluation has been run.
-- Full detector `forward_test` still fails on the current synthetic dummy input metadata shape.
+- This specific dummy-forward probe used synthetic inputs only.
+- Its full-detector `forward_test` failure was a synthetic metadata/input nesting issue.
+- Later sections supersede this limitation with real nuScenes-mini dataset loading, checkpoint loading, inference, and diagnostic training.
 
 ## Final Decoder Layout Patch Status
 
@@ -296,30 +356,37 @@ Current dummy-forward outputs:
 - `all_bbox_preds`: `(6, 1, 900, 10)`.
 - CUDA extension path invoked: `True`.
 
-Still failing:
+Historical synthetic-only failure:
 
-- Full detector `model.forward(return_loss=False)` on the current synthetic input.
+- Full detector `model.forward(return_loss=False)` failed on the synthetic input.
 - Failure: `RuntimeError: shape '[1, 6, 6, 1, 4, 4]' is invalid for input of size 96`.
-- Interpretation: this is likely a synthetic metadata/input nesting mismatch in full `forward_test`, not a failure of the BEVFormer head itself.
+- Interpretation: this was a synthetic metadata/input nesting mismatch in full `forward_test`, not a failure of the BEVFormer head itself.
+- Later real nuScenes-mini inference through `tools/test.py` passed.
 
-Still not tested:
+Superseded by later validation:
 
-- Real nuScenes sample.
-- Checkpoint loading.
-- Real inference.
-- Training.
-- Evaluation.
+- Real nuScenes-mini samples now load successfully.
+- Checkpoint loading now passes through `tools/test.py`.
+- Small-subset inference now passes through `tools/test.py`.
+- Single-GPU diagnostic training now passes through `tools/train.py`.
+- Official evaluation remains unclaimed.
 
-## Not Tested / Not Working Yet
+## Historical Not-Tested Status Superseded
 
-The following paths were deliberately not exercised:
+This section originally recorded the limits of the early synthetic-only porting
+stage. It is no longer the current repo status.
 
-- Dataset loading
-- Checkpoint loading
-- Full detection head forward / real inference
-- Training / evaluation
+Current validated coverage now includes:
 
-The CUDA extension execution path has now been invoked by the dummy-forward probe, but only on synthetic input and not through real inference.
+- nuScenes-mini data conversion with `tools/create_data.py`.
+- Real nuScenes-mini dataset loading.
+- Checkpoint loading with `ckpts/bevformer_tiny_epoch_24.pth`.
+- Small-subset inference with `tools/test.py`.
+- Single-GPU diagnostic training with `tools/train.py`.
+- Shape tracing with `tools/debug/trace_one_training_sample_shapes.py`.
+
+Official evaluation, distributed train/test, and full nuScenes trainval training
+remain unclaimed.
 
 Warnings still appear from legacy code, including AMP decorator deprecations in `multi_scale_deformable_attn_function.py` and transformer FFN argument deprecations. These warnings do not block the current model-build or smoke-test gates.
 
@@ -378,7 +445,7 @@ Current tracked `git diff --stat`:
 Run the model-build gate:
 
 ```bash
-python tools/debug_build_bevformer_tiny.py
+python tools/debug/debug_build_bevformer_tiny.py
 ```
 
 Expected tail output:
@@ -391,7 +458,7 @@ model built
 Run the smoke-test gate:
 
 ```bash
-python tools/debug_bevformer_smoke.py
+python tools/debug/debug_bevformer_smoke.py
 ```
 
 Expected tail output:
@@ -412,13 +479,13 @@ smoke test passed
 
 ## Recommended Next-Step Roadmap
 
-A. Use this state for architecture and code reading. The model object is constructible, module types are inspectable, and initialization succeeds.
+Historical next-step plan at that point:
 
-B. Optionally test checkpoint loading as a separate narrow gate. Keep it isolated from dataset, forward, and CUDA-extension execution paths.
+A. Use this state for architecture and code reading. The model object was constructible, module types were inspectable, and initialization succeeded.
 
-C. Optionally attempt one dummy forward only after checkpoint-loading expectations are clear. Treat this as a new compatibility effort because it may hit data-shape, metadata, or custom-op paths.
+B. Checkpoint loading, real nuScenes-mini dataset loading, inference, diagnostic training, and shape tracing were later validated in subsequent sections.
 
-D. Only much later attempt real nuScenes inference. That should be treated as a separate porting phase covering dataset pipelines, checkpoint compatibility, runtime metadata, CUDA extensions, and evaluation/inference APIs.
+C. Official evaluation, distributed train/test, and full nuScenes trainval training remain outside the validated scope.
 
 ## nuScenes Mini Data Conversion
 
@@ -463,7 +530,7 @@ Remaining limitations:
 - This validates the local nuScenes mini data conversion path only.
 - It does not validate full `v1.0-trainval`; no full dataset is assumed to exist.
 - It does not create or validate a ground-truth database for nuScenes because that call remains commented out in `tools/create_data.py`.
-- It does not run model training, inference, or evaluation.
+- This conversion command itself does not run model training, inference, or evaluation; those are validated separately in later sections.
 - It does not modify model architecture.
 
 ## Real nuScenes Mini Inference And Visualization Status
@@ -496,7 +563,7 @@ Verified milestones:
   - continuous temporal outputs differ from reset-each-frame outputs
 - Single-camera projection works for `CAM_FRONT`.
 - Six-camera projection grid was added and succeeds for mini validation indices 0 and 15:
-  - `tools/debug_bevformer_project_to_all_cameras.py`
+  - `tools/debug/debug_bevformer_project_to_all_cameras.py`
   - `outputs/camera_projection/debug_camera_projection_allcams_index_0_thr_0p2_topk_10.png`
   - `outputs/camera_projection/debug_camera_projection_allcams_index_15_thr_0p2_topk_10.png`
 
@@ -506,12 +573,12 @@ Verified milestones:
 - BEVFormer-tiny predictions are plausible but weak/noisy.
 - This is expected because tiny uses R50, 50x50 BEV, 3 encoder layers, and single-scale features.
 - The current artifacts are for implementation understanding and debugging, not official performance claims.
-- No official evaluation or training has been run.
+- Official evaluation and full training reproduction have not been run. Single-GPU diagnostic training is validated in later sections.
 
-### Remaining Not Tested
+### Remaining Not Claimed
 
 - Official nuScenes evaluation.
-- Training.
+- Full training reproduction beyond the diagnostic/smoke-training path.
 - BEVFormer-small/base checkpoint inference.
 - Camera projection quality across many samples.
 - Full trainval dataset.
@@ -569,21 +636,10 @@ Evaluation status:
 
 Distributed wrapper status:
 
-Command checked:
-
-```bash
-bash tools/dist_test.sh \
-  projects/configs/bevformer/bevformer_tiny.py \
-  ckpts/bevformer_tiny_epoch_24.pth \
-  1 \
-  --max-samples 5
-```
-
-Result:
-
-- `tools/dist_test.sh` still reaches `tools/test.py` through deprecated `torch.distributed.launch`.
-- Distributed mode is still pending; `tools/test.py` currently raises a clear `NotImplementedError` when `--launcher pytorch` is used.
-- `tools/dist_test.sh` has not been modified in this pass.
+- `tools/dist_train.sh` and `tools/dist_test.sh` have been replaced with
+  explicit unsupported stubs.
+- They no longer call deprecated `python -m torch.distributed.launch`.
+- Distributed train/test remains unsupported.
 
 ## Single-GPU Test Script Output Saving And Visualization
 
@@ -617,7 +673,7 @@ Scope notes:
 
 - This is single-GPU nuScenes-mini inference through `tools/test.py`.
 - This is not official nuScenes evaluation.
-- `tools/dist_test.sh` / distributed mode remains unported.
+- `tools/dist_test.sh` is an unsupported stub; distributed mode remains unported.
 - No model code was modified for this report update.
 
 Git diff stat at the time of this update:
@@ -638,7 +694,7 @@ Git diff stat at the time of this update:
 Command run:
 
 ```bash
-python tools/debug_train_bevformer_tiny_mini.py --max-iters 2 --no-checkpoint
+python tools/debug/debug_train_bevformer_tiny_mini.py --max-iters 2 --no-checkpoint
 ```
 
 Result:
@@ -700,7 +756,7 @@ total_loss: 21.196838
 
 Compatibility notes:
 
-- Added `tools/debug_train_bevformer_tiny_mini.py` as a narrow single-GPU smoke script instead of rewriting `tools/train.py`.
+- Added `tools/debug/debug_train_bevformer_tiny_mini.py` as a narrow single-GPU smoke script instead of rewriting `tools/train.py`.
 - Applies the same modern model config fixes used by `tools/test.py`:
   - remove `cfg.model.pretrained`
   - `cfg.model.img_backbone.type = "mmdet.ResNet"`
@@ -736,7 +792,7 @@ Git diff stat at the time of this update:
 Changed/untracked file relevant to this smoke test:
 
 ```text
-?? tools/debug_train_bevformer_tiny_mini.py
+?? tools/debug/debug_train_bevformer_tiny_mini.py
 ```
 
 ## nuScenes Mini Overfit Training Diagnostic
@@ -744,7 +800,7 @@ Changed/untracked file relevant to this smoke test:
 Command run:
 
 ```bash
-python tools/debug_overfit_bevformer_tiny_mini.py \
+python tools/debug/debug_overfit_bevformer_tiny_mini.py \
   --num-samples 8 \
   --max-iters 30 \
   --no-checkpoint \
@@ -811,7 +867,7 @@ Git diff stat at the time of this update:
 Changed/untracked file relevant to this diagnostic:
 
 ```text
-?? tools/debug_overfit_bevformer_tiny_mini.py
+?? tools/debug/debug_overfit_bevformer_tiny_mini.py
 ```
 
 ## Single-GPU Train Entrypoint Port
@@ -844,7 +900,7 @@ Result:
 
 Compatibility patches made:
 
-- Replaced the old OpenMMLab 1.x `tools/train.py` internals with a narrow diagnostic path that reuses the proven helpers from `tools/debug_train_bevformer_tiny_mini.py`.
+- Replaced the old OpenMMLab 1.x `tools/train.py` internals with a narrow diagnostic path that reuses the proven helpers from `tools/debug/debug_train_bevformer_tiny_mini.py`.
 - Uses `mmengine.config.Config` and `mmengine.config.DictAction`.
 - Applies the known modern config fixes:
   - remove `cfg.model.pretrained`
@@ -877,7 +933,7 @@ Remaining limitations:
 - This is still diagnostic single-GPU training.
 - It is not full 24-epoch training.
 - Distributed training remains unported.
-- Official evaluation remains unported for `tools/train.py`.
+- The validation loop remains unported for `tools/train.py`; use `--no-validate`.
 - Scheduler, hooks, resume behavior, validation loops, and long-run stability are still pending.
 
 Git diff stat at the time of this update:
@@ -893,4 +949,147 @@ Git diff stat at the time of this update:
  tools/train.py                                     | 503 ++++++++-------
  8 files changed, 1499 insertions(+), 481 deletions(-)
 ```
+
+## Cleanup and Compatibility Package Refactor
+
+The latest cleanup reorganized the diagnostic scripts and moved reusable
+compatibility code out of public entrypoints.
+
+Debug script organization:
+
+- Debug and investigation scripts were moved under `tools/debug/`.
+- Package markers were added so public scripts can import shared utilities
+  cleanly:
+  - `tools/__init__.py`
+  - `tools/debug/__init__.py`
+
+Reusable compatibility package:
+
+- Added `projects/mmdet3d_plugin/modern_compat/` as the shared compatibility
+  package for the modern OpenMMLab port.
+- Current package files:
+  - `projects/mmdet3d_plugin/modern_compat/__init__.py`
+  - `projects/mmdet3d_plugin/modern_compat/config.py`
+  - `projects/mmdet3d_plugin/modern_compat/dataset.py`
+  - `projects/mmdet3d_plugin/modern_compat/transforms.py`
+  - `projects/mmdet3d_plugin/modern_compat/training.py`
+  - `projects/mmdet3d_plugin/modern_compat/checkpoint.py`
+
+Public entrypoints cleaned:
+
+- `tools/train.py`
+- `tools/test.py`
+
+`tools/train.py` now imports the higher-level training and compatibility APIs
+from `projects.mmdet3d_plugin.modern_compat`:
+
+- `prepare_config`
+- `initialize_modern_compat`
+- `build_train_dataset`
+- `build_train_model`
+- `choose_device`
+- `prepare_train_batch`
+- `parse_losses`
+
+`tools/train.py` no longer directly imports the lower-level compatibility
+helpers that implement the details of the port, including:
+
+- `apply_config_fixes`
+- `attach_legacy_infos`
+- `configure_train_dataset`
+- `register_runtime_compat_transforms`
+- `patch_legacy_assigner_and_sampler`
+
+Transform compatibility scope:
+
+- `modern_compat/transforms.py` is intentionally narrow. It only provides
+  runtime shims for legacy transform names that are missing under the modern
+  stack.
+- Current shimmed legacy names:
+  - `LoadMultiViewImageFromFiles`
+  - `DefaultFormatBundle3D`
+- The full data pipeline does not come only from
+  `modern_compat/transforms.py`. It still comes from the BEVFormer config and
+  the original/plugin/MMDetection3D transform registrations. The compatibility
+  module only fills the missing legacy names needed by the old BEVFormer
+  pipeline.
+
+Latest validation:
+
+```bash
+python -m py_compile ...
+```
+
+Result:
+
+- Passed for public entrypoints.
+- Passed for debug scripts under `tools/debug/`.
+- Passed for the reusable compatibility package under
+  `projects/mmdet3d_plugin/modern_compat/`.
+
+Command run:
+
+```bash
+python tools/train.py \
+  projects/configs/bevformer/bevformer_tiny.py \
+  --work-dir outputs/train_entrypoint_smoke_clean2 \
+  --max-iters 5 \
+  --no-validate
+```
+
+Result:
+
+- Passed.
+- Confirmed the cleaned `tools/train.py` entrypoint can still build the
+  nuScenes-mini train dataset, load batches, run forward loss, run backward,
+  and take optimizer steps through the higher-level compatibility APIs.
+
+Command run:
+
+```bash
+python tools/test.py \
+  projects/configs/bevformer/bevformer_tiny.py \
+  ckpts/bevformer_tiny_epoch_24.pth \
+  --max-samples 2 \
+  --out outputs/test_outputs_clean2/test_max2.pkl \
+  --show-dir outputs/test_outputs_clean2/vis \
+  --show-index 0
+```
+
+Result:
+
+- Passed.
+- Confirmed the cleaned `tools/test.py` entrypoint can still load the
+  pretrained BEVFormer tiny checkpoint, run inference on two nuScenes-mini
+  validation samples, save predictions, and generate visualization output for
+  the requested sample.
+
+Command run:
+
+```bash
+python tools/debug/trace_one_training_sample_shapes.py
+```
+
+Result:
+
+- Passed.
+- Confirmed the moved debug script still traces one real training sample
+  through the image feature path, BEV encoder, detection head, and loss path.
+
+Remaining limitations after cleanup:
+
+- The validated path is still single-GPU.
+- The validation loop in `tools/train.py` is not ported; use `--no-validate`.
+- Distributed train/test remain unsupported.
+- Old distributed wrappers were replaced with explicit unsupported stubs:
+  - `tools/dist_train.sh`
+  - `tools/dist_test.sh`
+- These stubs fail clearly instead of routing to deprecated
+  `python -m torch.distributed.launch`, which avoids users accidentally
+  thinking distributed training/testing is currently supported.
+- `tools/train.py` remains a diagnostic/smoke-training entrypoint, not a full
+  official OpenMMLab training runner.
+- Full nuScenes trainval training and official nuScenes metric reproduction
+  have not been claimed.
+- Generated outputs and checkpoints should not be committed.
 

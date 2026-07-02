@@ -14,10 +14,10 @@ from matplotlib.patches import Polygon, Rectangle
 from mmengine.config import Config
 from mmengine.registry import init_default_scope
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from tools.debug_bevformer_checkpoint_load import load_checkpoint_modern_safe  # noqa: E402
-from tools.debug_bevformer_visualize_bev_with_gt import (  # noqa: E402
+from tools.debug.debug_bevformer_checkpoint_load import load_checkpoint_modern_safe  # noqa: E402
+from tools.debug.debug_bevformer_visualize_bev_with_gt import (  # noqa: E402
     DEFAULT_CHECKPOINT,
     box_corners_bev,
     extract_gt_from_dataset,
@@ -25,7 +25,7 @@ from tools.debug_bevformer_visualize_bev_with_gt import (  # noqa: E402
     label_to_class,
     select_predictions,
 )
-from tools.debug_nuscenes_real_full_forward import (  # noqa: E402
+from tools.debug.debug_nuscenes_real_full_forward import (  # noqa: E402
     CONFIG_PATH,
     apply_config_fixes,
     attach_legacy_infos,
