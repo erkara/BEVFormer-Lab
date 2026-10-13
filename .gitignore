@@ -220,3 +220,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 /datasets/
+.cptr
+.idea/
+/outputs/
+/work_dirs/
+/checkpoints/
+/pretrained/

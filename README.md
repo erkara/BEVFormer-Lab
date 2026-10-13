@@ -10,6 +10,7 @@ BEVFormer on current OpenMMLab versions.
 - Single-GPU inference with the pretrained tiny checkpoint
 - Single-GPU diagnostic training and smoke training
 - Single-GPU train/test entrypoints validated for the current port
+- Experimental 2D BEV occupancy/objectness path with standalone entrypoints
 - Tensor-shape tracing utilities
 - Cleaned compatibility layer under `projects/mmdet3d_plugin/modern_compat`
 - Debug scripts isolated under `tools/debug`
@@ -66,6 +67,45 @@ python tools/test.py \
 python tools/debug/trace_one_training_sample_shapes.py
 ```
 
+## Experimental 2D BEV occupancy/objectness
+
+This repo includes an experimental camera-only 2D BEV occupancy/objectness path
+on top of BEVFormer. It uses BEVFormer as a BEV feature extractor and trains a
+small CNN head to predict a binary top-down vehicle occupancy mask from temporal
+multi-camera images.
+
+The occupancy target is built from nuScenes 3D box annotations by selecting
+vehicle-like classes and rasterizing their top-down footprints into a BEV mask.
+This path is separate from the original BEVFormer detection path:
+`tools/train.py`, `tools/test.py`, and the original detection configs are
+unchanged.
+
+Core config: `projects/configs/bevformer/bevformer_tiny_occ.py`
+
+Main entrypoints:
+
+```bash
+python tools/debug/visualize_occupancy_target.py --num-samples 3
+python tools/debug/overfit_occupancy_head.py --num-samples 2 --iters 50
+python tools/train_occ.py --num-samples 2 --max-iters 5 --work-dir outputs/occ_train_smoke
+python tools/test_occ.py --checkpoint outputs/occ_train_smoke/latest.pth --num-samples 2 --output-dir outputs/occ_test_smoke
+```
+
+Validated smoke-test shapes:
+
+```text
+image batch:        (1, 3, 6, 3, 480, 800)
+raw BEV encoder:    (1, 2500, 256), layout [B, H*W, C]
+BEV feature map:    (1, 256, 50, 50)
+occupancy logits:   (1, 1, 50, 50)
+occupancy target:   (1, 1, 50, 50)
+```
+
+See [occupancy head docs](docs/occupancy_head.md) for implementation details,
+validated loss numbers, outputs, and limitations. In short, this is binary
+vehicle-objectness from box footprints, not semantic or LiDAR occupancy, and it
+does not provide distributed training or official occupancy metrics.
+
 ## Current validation status
 
 Validated:
@@ -77,6 +117,7 @@ Validated:
 - Single-GPU diagnostic training
 - Loss, backward, and optimizer step
 - Shape tracing through image features, BEV encoder, detection head, and loss
+- Experimental occupancy target generation, overfit, train, and test smoke paths
 
 ## Limitations
 
@@ -89,16 +130,20 @@ Validated:
 - No full nuScenes trainval training validated
 - No official nuScenes metric reproduction claimed
 - Generated outputs and checkpoints should not be committed
+- Experimental occupancy path is not an official occupancy benchmark implementation
 
 ## Repository organization
 
 ```text
-tools/train.py                                      Single-GPU diagnostic training entrypoint
-tools/test.py                                       Single-GPU inference entrypoint
+tools/train.py                                      Single-GPU diagnostic detection training entrypoint
+tools/test.py                                       Single-GPU detection inference entrypoint
+tools/train_occ.py                                  Experimental occupancy training entrypoint
+tools/test_occ.py                                   Experimental occupancy inference/visualization entrypoint
 tools/dist_train.sh                                 Unsupported distributed-training stub
 tools/dist_test.sh                                  Unsupported distributed-testing stub
 tools/create_data.py                                nuScenes-mini data conversion
 tools/debug/                                        Debug and tracing utilities
+projects/mmdet3d_plugin/bevformer/occupancy/       BEV occupancy target rasterization utilities
 projects/mmdet3d_plugin/modern_compat/             Reusable modern OpenMMLab compatibility layer
 reports/bevformer_modern_port_status.md            Detailed porting notes and validation log
 ```

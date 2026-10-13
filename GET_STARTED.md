@@ -2,7 +2,7 @@
 
 This is the practical quickstart for the modernized BEVFormer fork. It covers
 the validated single-GPU path for nuScenes-mini data conversion, diagnostic
-training, inference, and shape tracing.
+training, inference, shape tracing, and the experimental occupancy entrypoints.
 
 For detailed engineering notes, see
 [`reports/bevformer_modern_port_status.md`](reports/bevformer_modern_port_status.md).
@@ -41,6 +41,8 @@ Public entrypoints:
 tools/create_data.py
 tools/train.py
 tools/test.py
+tools/train_occ.py
+tools/test_occ.py
 ```
 
 Debug tools:
@@ -149,6 +151,34 @@ Run one training sample through the traced debug path:
 python tools/debug/trace_one_training_sample_shapes.py
 ```
 
+## Experimental occupancy smoke path
+
+The occupancy extension is separate from the original detection path. It trains
+a small binary BEV occupancy/objectness head on top of BEVFormer BEV features,
+using rasterized vehicle-like nuScenes box footprints as targets.
+
+```bash
+python tools/debug/visualize_occupancy_target.py --num-samples 3 --start-index 0
+```
+
+```bash
+python tools/debug/overfit_occupancy_head.py --num-samples 2 --iters 50
+```
+
+```bash
+python tools/train_occ.py \
+  --num-samples 2 \
+  --max-iters 5 \
+  --work-dir outputs/occ_train_smoke
+```
+
+```bash
+python tools/test_occ.py \
+  --checkpoint outputs/occ_train_smoke/latest.pth \
+  --num-samples 2 \
+  --output-dir outputs/occ_test_smoke
+```
+
 ## Limitations
 
 - Single-GPU train/test is validated.
@@ -161,3 +191,4 @@ python tools/debug/trace_one_training_sample_shapes.py
 - Full nuScenes trainval training is not validated.
 - Official metric reproduction is not claimed.
 - Outputs and checkpoints should not be committed.
+- Occupancy scripts are experimental and do not provide official benchmark metrics.
