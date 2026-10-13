@@ -1,97 +1,103 @@
-# Modern BEVFormer Lab
+# BEVFormer: A Working OpenMMLab Port
 
-A modernized, single-GPU-friendly BEVFormer fork for understanding and running
-BEVFormer on current OpenMMLab versions.
+[BEVFormer](https://github.com/fundamentalvision/BEVFormer) is an influential
+camera-based 3D perception model, but its original code is difficult to run
+with current dependencies. This fork brings BEVFormer
+Tiny training and inference to a modern OpenMMLab stack, with a validated
+single-GPU workflow on nuScenes-mini. It also adds an experimental 2D BEV
+occupancy path for exploring the model's BEV features.
 
-## What this repo provides
+Run the commands below from the repository root. The project has been validated
+on nuScenes-mini with a single GPU.
 
-- BEVFormer Tiny model construction under modern OpenMMLab
-- nuScenes-mini data conversion
-- Single-GPU inference with the pretrained tiny checkpoint
-- Single-GPU diagnostic training and smoke training
-- Single-GPU train/test entrypoints validated for the current port
-- Experimental 2D BEV occupancy/objectness path with standalone entrypoints
-- Tensor-shape tracing utilities
-- Cleaned compatibility layer under `projects/mmdet3d_plugin/modern_compat`
-- Debug scripts isolated under `tools/debug`
+## Requirements
 
-## Documentation
-
-- [Get started](GET_STARTED.md)
-- [Detailed port status report](reports/bevformer_modern_port_status.md)
-
-## Environment
-
-Currently validated stack:
-
-- Python 3.10
-- PyTorch 2.12.1+cu130
-- MMCV 2.1.0
-- MMEngine 0.10.7
-- MMDetection 3.3.0
-- MMDetection3D 1.4.0
-
-## Data
-
-The repo expects nuScenes-mini under:
-
-```text
-data/nuscenes/
-```
-
-`tools/create_data.py` has been patched for nuScenes-mini conversion. The
-generated info files are consumed by the diagnostic train, test, and debug
-entrypoints.
-
-## Quick checks
+Validated versions: Python 3.10, PyTorch 2.12.1+cu130, MMCV 2.1.0,
+MMEngine 0.10.7, MMDetection 3.3.0, and MMDetection3D 1.4.0.
+Install PyTorch for your CUDA platform, then the OpenMMLab packages and
+nuScenes tooling:
 
 ```bash
-python tools/train.py \
-  projects/configs/bevformer/bevformer_tiny.py \
-  --work-dir outputs/train_entrypoint_smoke \
-  --max-iters 5 \
-  --no-validate
+pip install torch torchvision torchaudio
+pip install mmcv==2.1.0 mmengine==0.10.7 mmdet==3.3.0 mmdet3d==1.4.0
+pip install nuscenes-devkit
 ```
+
+MMCV may require a wheel compatible with your PyTorch and CUDA versions.
+
+## Prepare nuScenes-mini
+
+Download [nuScenes-mini and the CAN bus expansion](https://www.nuscenes.org/download).
+Unpack nuScenes-mini under `data/nuscenes/` (including `samples/`, `sweeps/`,
+`maps/`, and `v1.0-mini/`) and the CAN bus expansion under `data/can_bus/`.
+Then generate the training and validation info files:
 
 ```bash
-python tools/test.py \
-  projects/configs/bevformer/bevformer_tiny.py \
-  ckpts/bevformer_tiny_epoch_24.pth \
-  --max-samples 2 \
-  --out outputs/test_outputs/test_max2.pkl \
-  --show-dir outputs/test_outputs/vis \
-  --show-index 0
+python tools/create_data.py nuscenes \
+  --root-path ./data/nuscenes \
+  --out-dir ./data/nuscenes \
+  --extra-tag nuscenes \
+  --version v1.0-mini \
+  --canbus ./data
 ```
+
+This command converts the downloaded data; it does not download it. The
+scripts expect `data/nuscenes/nuscenes_infos_temporal_train.pkl` and
+`data/nuscenes/nuscenes_infos_temporal_val.pkl` afterward.
+
+## Pretrained checkpoint
+
+The [original BEVFormer model zoo](https://github.com/fundamentalvision/BEVFormer#model-zoo)
+provides the pretrained Tiny checkpoint. Download it to the path used by the
+scripts:
 
 ```bash
-python tools/debug/trace_one_training_sample_shapes.py
+mkdir -p ckpts
+curl -L --fail https://github.com/zhiqi-li/storage/releases/download/v1.0/bevformer_tiny_epoch_24.pth \
+  -o ckpts/bevformer_tiny_epoch_24.pth
 ```
 
-## Experimental 2D BEV occupancy/objectness
+Detection inference requires a compatible checkpoint; the command below uses
+this one. The training scripts use it for initialization by default; pass
+`--no-checkpoint` to train without it.
 
-This repo includes an experimental camera-only 2D BEV occupancy/objectness path
-on top of BEVFormer. It uses BEVFormer as a BEV feature extractor and trains a
-small CNN head to predict a binary top-down vehicle occupancy mask from temporal
-multi-camera images.
+## 3D detection
 
-The occupancy target is built from nuScenes 3D box annotations by selecting
-vehicle-like classes and rasterizing their top-down footprints into a BEV mask.
-This path is separate from the original BEVFormer detection path:
-`tools/train.py`, `tools/test.py`, and the original detection configs are
-unchanged.
-
-Core config: `projects/configs/bevformer/bevformer_tiny_occ.py`
-
-Main entrypoints:
+The Tiny detection path trains with `tools/train.py` and runs inference with
+`tools/test.py`:
 
 ```bash
-python tools/debug/visualize_occupancy_target.py --num-samples 3
-python tools/debug/overfit_occupancy_head.py --num-samples 2 --iters 50
-python tools/train_occ.py --num-samples 2 --max-iters 5 --work-dir outputs/occ_train_smoke
-python tools/test_occ.py --checkpoint outputs/occ_train_smoke/latest.pth --num-samples 2 --output-dir outputs/occ_test_smoke
+python tools/train.py projects/configs/bevformer/bevformer_tiny.py \
+  --work-dir outputs/detection_train --max-iters 100 --no-validate
+
+python tools/test.py projects/configs/bevformer/bevformer_tiny.py \
+  ckpts/bevformer_tiny_epoch_24.pth --out outputs/detection_predictions.pkl
 ```
 
-Validated smoke-test shapes:
+Training cycles over a fixed mini subset for the requested iterations and
+saves a checkpoint and loss CSV under `--work-dir`. Validation is not available
+in this trainer. Inference saves predictions for the validation split.
+
+## Experimental 2D BEV occupancy
+
+The occupancy path uses BEVFormer features to predict a binary top-down mask
+of vehicle footprints from temporal multi-camera images. Its targets come from
+rasterized nuScenes 3D boxes. It has its own
+[config](projects/configs/bevformer/bevformer_tiny_occ.py); the detection path
+is unchanged.
+
+```bash
+python tools/train_occ.py --max-iters 100 --work-dir outputs/occ_train
+
+python tools/test_occ.py --checkpoint outputs/occ_train/latest.pth \
+  --split val --output-dir outputs/occ_test
+```
+
+Training saves checkpoints and `loss_history.csv` under `--work-dir`.
+Inference saves prediction/target images and `summary.csv` under
+`--output-dir` (two samples by default).
+
+Validated tensor shapes for the Tiny configuration:
 
 ```text
 image batch:        (1, 3, 6, 3, 480, 800)
@@ -101,54 +107,11 @@ occupancy logits:   (1, 1, 50, 50)
 occupancy target:   (1, 1, 50, 50)
 ```
 
-See [occupancy head docs](docs/occupancy_head.md) for implementation details,
-validated loss numbers, outputs, and limitations. In short, this is binary
-vehicle-objectness from box footprints, not semantic or LiDAR occupancy, and it
-does not provide distributed training or official occupancy metrics.
+See [occupancy head documentation](docs/occupancy_head.md) for the target and
+model details. This task predicts box-footprint objectness from camera images.
 
-## Current validation status
+## Scope
 
-Validated:
-
-- Model build
-- Checkpoint loading
-- Real nuScenes-mini dataset loading
-- Inference on mini validation samples
-- Single-GPU diagnostic training
-- Loss, backward, and optimizer step
-- Shape tracing through image features, BEV encoder, detection head, and loss
-- Experimental occupancy target generation, overfit, train, and test smoke paths
-
-## Limitations
-
-- Single-GPU path validated
-- Distributed train/test not yet ported
-- `tools/dist_train.sh` and `tools/dist_test.sh` are placeholder stubs that
-  fail clearly instead of launching unsupported distributed jobs
-- `tools/train.py` is diagnostic and smoke-training oriented, not a full
-  official training runner
-- No full nuScenes trainval training validated
-- No official nuScenes metric reproduction claimed
-- Generated outputs and checkpoints should not be committed
-- Experimental occupancy path is not an official occupancy benchmark implementation
-
-## Repository organization
-
-```text
-tools/train.py                                      Single-GPU diagnostic detection training entrypoint
-tools/test.py                                       Single-GPU detection inference entrypoint
-tools/train_occ.py                                  Experimental occupancy training entrypoint
-tools/test_occ.py                                   Experimental occupancy inference/visualization entrypoint
-tools/dist_train.sh                                 Unsupported distributed-training stub
-tools/dist_test.sh                                  Unsupported distributed-testing stub
-tools/create_data.py                                nuScenes-mini data conversion
-tools/debug/                                        Debug and tracing utilities
-projects/mmdet3d_plugin/bevformer/occupancy/       BEV occupancy target rasterization utilities
-projects/mmdet3d_plugin/modern_compat/             Reusable modern OpenMMLab compatibility layer
-reports/bevformer_modern_port_status.md            Detailed porting notes and validation log
-```
-
-## Notes
-
-This repo is intended for learning, debugging, and modernization of BEVFormer.
-It does not claim official paper-level reproduction.
+Distributed training, full nuScenes trainval training, and official benchmark
+reproduction have not been validated. Generated outputs and checkpoints belong
+in the ignored `outputs/` and `ckpts/` directories.
