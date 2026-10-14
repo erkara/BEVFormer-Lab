@@ -45,13 +45,31 @@ projects/mmdet3d_plugin/bevformer/detectors/bevformer_occupancy.py
 projects/configs/bevformer/bevformer_tiny_occ.py
 ```
 
+## Prepare nuScenes-mini
+
+Download the [nuScenes-mini dataset and CAN bus expansion](https://www.nuscenes.org/download).
+Extract mini into `data/nuscenes/` so it contains `v1.0-mini/`, `samples/`,
+and `sweeps/`. Extract CAN bus so its pose files are at
+`data/can_bus/can_bus/scene-*_pose.json`. From the repository root, run:
+
+```bash
+python tools/create_data.py nuscenes \
+  --root-path data/nuscenes --out-dir data/nuscenes \
+  --extra-tag nuscenes --version v1.0-mini --canbus data
+```
+
+This creates `data/nuscenes/nuscenes_infos_temporal_train.pkl` and
+`data/nuscenes/nuscenes_infos_temporal_val.pkl`, the paths used by the occupancy
+scripts. Download the pretrained Tiny checkpoint as described in the
+[README](../README.md#pretrained-checkpoint) before training.
+
 ## Run
 
 Train occupancy model:
 
 ```bash
 python tools/train_occ.py \
-  --max-iters 100 \
+  --epochs 10 \
   --work-dir outputs/occ_train
 ```
 
@@ -59,10 +77,21 @@ Test/visualize occupancy checkpoint:
 
 ```bash
 python tools/test_occ.py \
-  --checkpoint outputs/occ_train/latest.pth \
+  --checkpoint outputs/occ_train/best.pth \
   --split val \
   --output-dir outputs/occ_test
 ```
+
+One epoch is one pass through the selected training samples. On the full mini
+training split, ten epochs take about 3,230 optimizer steps. `--max-iters`
+is only for short checks; 100 steps is less than one mini epoch.
+
+The trainer shuffles samples each epoch, gives the pretrained image backbone
+one-tenth the learning rate of the occupancy head and BEV encoder, and uses
+warmup, cosine decay, and gradient clipping. It evaluates all mini validation
+samples after each epoch and saves `best.pth` when validation IoU improves
+(breaking ties by lower validation loss).
+Validation disables random image distortion and uses a fixed temporal queue.
 
 Training uses the pretrained Tiny checkpoint at
 `ckpts/bevformer_tiny_epoch_24.pth` by default. Pass `--no-checkpoint` to
@@ -70,6 +99,14 @@ initialize without it. `--num-samples` selects a small cyclic training subset;
 its default uses the full mini training split. Inference saves predictions and
 box-footprint targets for two samples by default; use `--num-samples` to change
 that count.
+
+## Mini Validation Result
+
+In a 10-epoch nuScenes-mini run, the best checkpoint was from epoch 8
+(2,584 steps). Across all 81 mini validation frames, it reached **0.4377 IoU**
+and **0.6089 Dice** for binary vehicle-footprint masks at threshold 0.5.
+`tools/test_occ.py` defaults to visualizing only two frames from this same
+validation split; those examples are not an independent test score.
 
 ## Tensor Shapes
 
@@ -83,9 +120,13 @@ occupancy target:   (1, 1, 50, 50)
 
 ## Outputs
 
-- Training checkpoints and `loss_history.csv` are saved under `--work-dir`.
-- Training visualizations are saved under `<work-dir>/vis/`.
-- Test visualizations and `summary.csv` are saved under `--output-dir`.
+- `latest.pth`, validation-selected `best.pth`, `loss_history.csv`, and
+  `epoch_history.csv` are saved under `--work-dir`. The CSVs include IoU and
+  Dice at a 0.5 occupancy threshold.
+- Training and validation visualizations under `<work-dir>/vis/` show
+  per-sample IoU and Dice in the title.
+- Test visualizations and `summary.csv` are saved under `--output-dir` with
+  per-sample IoU and Dice at the selected `--threshold`.
 
 ## Limitations
 

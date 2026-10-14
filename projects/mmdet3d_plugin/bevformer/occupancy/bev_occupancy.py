@@ -27,7 +27,11 @@ VEHICLE_CLASSES = (
 
 @dataclass(frozen=True)
 class BEVGridSpec:
-    """Metric BEV range and discrete mask shape."""
+    """Ego-frame metric range and [row, col] mask shape.
+
+    The point-cloud x/y bounds come from the BEVFormer config; each cell covers
+    a metric rectangle, not just its center point.
+    """
 
     x_min: float
     y_min: float
@@ -199,6 +203,7 @@ def _segments_intersect(a, b, c, d, eps=1e-6):
 
 
 def _polygon_intersects_cell(polygon, polygon_path, x0, x1, y0, y1):
+    """Count corner containment or edge crossing as footprint coverage."""
     rect = np.asarray([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float32)
     if polygon_path.contains_points(rect, radius=1e-6).any():
         return True
@@ -238,6 +243,7 @@ def rasterize_bev_occupancy(
     mask = np.zeros(grid.shape, dtype=np.uint8)
 
     for polygon in footprints:
+        # Clip the footprint's grid-space bounding box before testing cells.
         row_col = grid.metric_to_grid(polygon)
         row_min = max(int(math.floor(float(row_col[:, 0].min()))), 0)
         row_max = min(int(math.ceil(float(row_col[:, 0].max()))), grid.height - 1)

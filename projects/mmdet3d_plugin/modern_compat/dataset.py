@@ -26,10 +26,25 @@ def configure_train_dataset(cfg):
     return train_cfg
 
 
-def configure_test_dataset(cfg):
+def configure_occupancy_eval_dataset(cfg):
+    """Keep GT boxes on mini val while removing random image augmentation.
+
+    The detection test pipeline omits GT, so occupancy validation starts from
+    the training pipeline and makes its temporal queue deterministic.
+    """
+    val_cfg = configure_train_dataset(cfg)
+    val_cfg.ann_file = str(Path(VAL_INFO).resolve())
+    val_cfg.data_root = DATA_ROOT
+    val_cfg.deterministic_history = True
+    val_cfg.pipeline = [transform for transform in val_cfg.pipeline
+                        if transform['type'] != 'PhotoMetricDistortionMultiViewImage']
+    return val_cfg
+
+
+def configure_test_dataset(cfg, data_root=None, ann_file=None):
     test_cfg = copy.deepcopy(cfg.data.test)
-    test_cfg.data_root = DATA_ROOT
-    test_cfg.ann_file = str(Path(VAL_INFO).resolve())
+    test_cfg.data_root = str(Path(data_root).resolve()) if data_root else DATA_ROOT
+    test_cfg.ann_file = str(Path(ann_file or VAL_INFO).resolve())
     test_cfg.test_mode = True
     test_cfg.lazy_init = True
     test_cfg.pop("samples_per_gpu", None)
@@ -112,7 +127,11 @@ def make_legacy_pre_pipeline():
 
 
 def attach_legacy_infos(dataset, ann_file, class_names=None):
-    """Attach legacy nuScenes infos fields expected by BEVFormer dataset code."""
+    """Expose old nuScenes info fields and annotation hooks to the modern dataset.
+
+    BEVFormer expects ``data_infos`` and its legacy pre-pipeline/GT box format;
+    modern MMDetection3D initializes datasets through a different API.
+    """
     annotations = load(ann_file)
     infos = annotations.get("infos", annotations if isinstance(annotations, list) else None)
     if infos is None:
@@ -144,6 +163,7 @@ def move_labels_to_device(labels, device):
 
 
 def prepare_train_batch(dataset, index, device):
+    """Unwrap one temporal sample into the legacy model's batch-one inputs."""
     item = dataset[index]
     img = unwrap_datacontainer(item["img"])
     img_metas = unwrap_datacontainer(item["img_metas"])

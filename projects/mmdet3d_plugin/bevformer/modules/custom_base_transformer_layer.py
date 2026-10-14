@@ -56,7 +56,6 @@ def build_feedforward_network(cfg, default_args=None):
     return MODELS.build(cfg, default_args=default_args)
 
 
-@TRANSFORMER_LAYER.register_module(name='DetrTransformerDecoderLayer')
 @TRANSFORMER_LAYER.register_module()
 class MyCustomBaseTransformerLayer(BaseModule):
     """Base `TransformerLayer` for vision transformer.
@@ -289,3 +288,13 @@ class MyCustomBaseTransformerLayer(BaseModule):
                 ffn_index += 1
 
         return query
+
+
+@TRANSFORMER_LAYER.register_module()
+class DetrTransformerDecoderLayer(MyCustomBaseTransformerLayer):
+    """Keep the original DETR decoder's sequence-first query layout."""
+
+    def __init__(self, *args, batch_first=False, **kwargs):
+        if batch_first:
+            raise ValueError('DETR decoder expects [num_query, batch, channels]')
+        super().__init__(*args, batch_first=False, **kwargs)

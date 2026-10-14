@@ -1,5 +1,6 @@
+"""Visualize occupancy predictions and GT boxes on mini train or validation."""
+
 import argparse
-import copy
 import csv
 import logging
 import sys
@@ -20,14 +21,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import mmdet.models  # noqa: F401,E402
 import mmdet3d.models  # noqa: F401,E402
 import projects.mmdet3d_plugin  # noqa: F401,E402
+from tools.occ_metrics import occupancy_scores  # noqa: E402
 from projects.mmdet3d_plugin.modern_compat import (  # noqa: E402
     DATA_ROOT,
     TRAIN_INFO,
-    VAL_INFO,
     apply_config_fixes,
     attach_legacy_infos,
     build_dataset,
     choose_device,
+    configure_occupancy_eval_dataset,
     configure_train_dataset,
     parse_losses,
     prepare_train_batch,
@@ -45,7 +47,7 @@ def parse_args():
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="occupancy config path")
     parser.add_argument("--checkpoint", required=True, help="checkpoint saved by tools/train_occ.py or compatible state dict")
     parser.add_argument("--device", default="auto", help="device, e.g. auto, cuda, cuda:0, cpu")
-    parser.add_argument("--split", choices=("train", "val"), default="train", help="dataset split; val uses val infos with train pipeline so GT targets exist")
+    parser.add_argument("--split", choices=("train", "val"), default="val", help="dataset split; val is deterministic and includes GT targets")
     parser.add_argument("--start-index", type=int, default=0, help="first dataset index")
     parser.add_argument("--num-samples", type=int, default=2, help="number of consecutive/cyclic samples")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR, help="directory for visualizations and CSV summary")
@@ -54,11 +56,10 @@ def parse_args():
 
 
 def configure_occ_dataset(cfg, split):
+    """Use GT-bearing samples on both splits; make validation deterministic."""
     dataset_cfg = configure_train_dataset(cfg)
     if split == "val":
-        dataset_cfg.ann_file = str(Path(VAL_INFO).resolve())
-        dataset_cfg.data_root = DATA_ROOT
-        dataset_cfg.test_mode = False
+        return configure_occupancy_eval_dataset(cfg)
     elif split == "train":
         dataset_cfg.ann_file = str(Path(TRAIN_INFO).resolve())
         dataset_cfg.data_root = DATA_ROOT
@@ -102,6 +103,7 @@ def build_model_and_load(cfg, checkpoint, device):
 
 
 def sample_meta(batch):
+    """Read identity metadata from the current (last) temporal frame."""
     queue = batch["img_metas"][0]
     if isinstance(queue, dict) and queue and all(isinstance(k, int) for k in queue):
         return queue[max(queue)]
@@ -110,7 +112,7 @@ def sample_meta(batch):
     return {}
 
 
-def save_visualization(debug, out_dir, sample_index, sample_idx, threshold, loss_value):
+def save_visualization(debug, out_dir, sample_index, sample_idx, threshold, loss_value, scores):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     logits = debug["logits"].detach().cpu()
@@ -133,13 +135,13 @@ def save_visualization(debug, out_dir, sample_index, sample_idx, threshold, loss
     for ax in axes:
         ax.set_xticks([])
         ax.set_yticks([])
-    fig.suptitle(f"index={sample_index} sample={sample_idx} loss={loss_value:.6f}")
+    fig.suptitle(f"index={sample_index} sample={sample_idx}  IoU={scores['iou']:.3f}  Dice={scores['dice']:.3f}  loss={loss_value:.4f}")
     fig.tight_layout()
     safe_sample = str(sample_idx).replace("/", "_") if sample_idx else "missing_sample"
     out_path = out_dir / f"sample_{sample_index:04d}_{safe_sample}.png"
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
-    return out_path, prob, target, pred
+    return out_path, prob
 
 
 def write_summary_csv(path, rows):
@@ -150,6 +152,9 @@ def write_summary_csv(path, rows):
             "occupied_target_cells",
             "predicted_positive_cells",
             "mean_predicted_probability",
+            "threshold",
+            "iou",
+            "dice",
             "bce_loss",
             "visualization",
         ]
@@ -210,10 +215,11 @@ def main():
                 print_debug_shapes(batch, debug)
             meta = sample_meta(batch)
             sample_idx = meta.get("sample_idx", "")
-            vis_path, prob, target, pred = save_visualization(
-                debug, output_dir, dataset_index, sample_idx, args.threshold, loss_value)
-            occupied_target_cells = int(target.sum())
-            predicted_positive_cells = int(pred.sum())
+            scores = occupancy_scores(debug["logits"], debug["targets"], args.threshold)
+            vis_path, prob = save_visualization(
+                debug, output_dir, dataset_index, sample_idx, args.threshold, loss_value, scores)
+            occupied_target_cells = scores["target_cells"]
+            predicted_positive_cells = scores["predicted_cells"]
             mean_probability = float(prob.mean())
             rows.append(dict(
                 sample_index=dataset_index,
@@ -221,13 +227,17 @@ def main():
                 occupied_target_cells=occupied_target_cells,
                 predicted_positive_cells=predicted_positive_cells,
                 mean_predicted_probability=f"{mean_probability:.8f}",
+                threshold=f"{args.threshold:g}",
+                iou=f"{scores['iou']:.8f}",
+                dice=f"{scores['dice']:.8f}",
                 bce_loss=f"{loss_value:.8f}",
                 visualization=str(vis_path),
             ))
             print(
                 f"sample {rank:03d}/{len(indices):03d} index={dataset_index} "
                 f"target_cells={occupied_target_cells} pred_cells={predicted_positive_cells} "
-                f"mean_prob={mean_probability:.6f} loss={loss_value:.6f} vis={vis_path}")
+                f"mean_prob={mean_probability:.6f} iou={scores['iou']:.4f} dice={scores['dice']:.4f} "
+                f"loss={loss_value:.6f} vis={vis_path}")
 
     csv_path = output_dir / "summary.csv"
     write_summary_csv(csv_path, rows)

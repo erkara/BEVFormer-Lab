@@ -6,6 +6,7 @@
 import mmcv
 import numpy as np
 import os
+from pathlib import Path
 from collections import OrderedDict
 from mmengine.fileio import dump, load
 from mmengine.utils import check_file_exist, track_iter_progress
@@ -37,6 +38,15 @@ def _map_name_from_general_to_detection(category_name):
     return category_to_detection_name(category_name)
 
 
+def resolve_canbus_root(path):
+    """Return the parent expected by NuScenesCanBus for either archive layout."""
+    root = Path(path).expanduser().resolve()
+    for candidate in (root, root / 'can_bus'):
+        if any((candidate / 'can_bus').glob('scene-*_pose.json')):
+            return candidate
+    raise FileNotFoundError(f'CAN bus pose files not found below {root}')
+
+
 def create_nuscenes_infos(root_path,
                           out_path,
                           can_bus_root_path,
@@ -59,7 +69,9 @@ def create_nuscenes_infos(root_path,
     from nuscenes.can_bus.can_bus_api import NuScenesCanBus
     print(version, root_path)
     nusc = NuScenes(version=version, dataroot=root_path, verbose=True)
-    nusc_can_bus = NuScenesCanBus(dataroot=can_bus_root_path)
+    can_bus_root = resolve_canbus_root(can_bus_root_path)
+    print(f'CAN bus root: {can_bus_root}')
+    nusc_can_bus = NuScenesCanBus(dataroot=str(can_bus_root))
     from nuscenes.utils import splits
     available_vers = ['v1.0-trainval', 'v1.0-test', 'v1.0-mini']
     assert version in available_vers
@@ -99,6 +111,12 @@ def create_nuscenes_infos(root_path,
 
     train_nusc_infos, val_nusc_infos = _fill_trainval_infos(
         nusc, nusc_can_bus, train_scenes, val_scenes, test, max_sweeps=max_sweeps)
+
+    all_infos = train_nusc_infos + val_nusc_infos
+    populated = sum(bool(np.any(info['can_bus'])) for info in all_infos)
+    print(f'frames with CAN bus data: {populated}/{len(all_infos)}')
+    if not test and all_infos and populated == 0:
+        raise ValueError('all CAN bus records are zero; check the CAN bus expansion')
 
     metadata = dict(version=version)
     if test:

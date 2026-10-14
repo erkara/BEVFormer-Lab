@@ -3,10 +3,7 @@ warnings.filterwarnings("ignore")
 import argparse
 import math
 import os
-import os.path as osp
 import sys
-import time
-import traceback
 import warnings
 from pathlib import Path
 
@@ -36,6 +33,10 @@ from projects.mmdet3d_plugin.modern_compat import (  # noqa: E402
     load_checkpoint_modern,
     register_runtime_compat_transforms,
     unwrap_datacontainer,
+)
+from projects.mmdet3d_plugin.modern_compat.evaluation import (  # noqa: E402
+    evaluate_nuscenes_results,
+    format_nuscenes_results,
 )
 
 def get_primary_item(item):
@@ -234,12 +235,17 @@ def save_bev_visualization(output, dataset, dataset_index, metadata_dict, cfg, a
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Modern BEVFormer test/inference entrypoint')
-    parser.add_argument('config', help='test config file path')
-    parser.add_argument('checkpoint', help='checkpoint file')
+    parser.add_argument('config', nargs='?', help='test config file path (positional form)')
+    parser.add_argument('checkpoint', nargs='?', help='checkpoint file (positional form)')
+    parser.add_argument('--config-file', help='test config file path')
+    parser.add_argument('--checkpoint', dest='checkpoint_file', help='checkpoint file')
+    parser.add_argument('--data-root', help='nuScenes data root; defaults to the mini data root')
+    parser.add_argument('--ann-file', help='validation info pickle; defaults to the mini info file')
     parser.add_argument('--out', help='output result file in pickle format')
     parser.add_argument('--fuse-conv-bn', action='store_true', help='accepted for CLI compatibility; currently skipped')
     parser.add_argument('--format-only', action='store_true', help='format outputs without evaluation')
     parser.add_argument('--eval', type=str, nargs='+', help='evaluation metrics, e.g. bbox')
+    parser.add_argument('--eval-dir', default='outputs/detection_eval', help='directory for nuScenes result JSON and metrics')
     parser.add_argument('--show', action='store_true', help='save one BEV visualization to the default output directory')
     parser.add_argument('--show-dir', help='directory where one BEV visualization will be saved')
     parser.add_argument('--gpu-collect', action='store_true', help='accepted for distributed CLI compatibility')
@@ -256,6 +262,14 @@ def parse_args():
     parser.add_argument('--score-thr', type=float, default=0.15, help='score threshold for visualization')
     parser.add_argument('--top-k', type=int, default=10, help='maximum predictions to draw in visualization; <=0 keeps all above threshold')
     args = parser.parse_args()
+    if args.config and args.config_file:
+        parser.error('specify the config either positionally or with --config-file, not both')
+    if args.checkpoint and args.checkpoint_file:
+        parser.error('specify the checkpoint either positionally or with --checkpoint, not both')
+    args.config = args.config_file or args.config
+    args.checkpoint = args.checkpoint_file or args.checkpoint
+    if not args.config or not args.checkpoint:
+        parser.error('both a config and checkpoint are required (positional or named)')
     if 'LOCAL_RANK' not in os.environ:
         os.environ['LOCAL_RANK'] = str(args.local_rank)
     if args.options and args.eval_options:
@@ -272,6 +286,10 @@ def main():
         raise NotImplementedError('Distributed tools/test.py is still pending; use --launcher none for this port gate.')
     if args.eval and args.format_only:
         raise ValueError('--eval and --format-only cannot both be specified')
+    if args.eval and args.eval != ['bbox']:
+        raise ValueError('only --eval bbox is supported')
+    if (args.eval or args.format_only) and args.max_samples is not None:
+        raise ValueError('nuScenes formatting and evaluation require the complete validation split')
     if args.out is not None and not args.out.endswith(('.pkl', '.pickle')):
         raise ValueError('The output file must be a pkl file.')
 
@@ -291,7 +309,7 @@ def main():
     print('\n=== build validation dataset ===')
     init_default_scope('mmdet3d')
     register_runtime_compat_transforms()
-    test_cfg = configure_test_dataset(cfg)
+    test_cfg = configure_test_dataset(cfg, data_root=args.data_root, ann_file=args.ann_file)
     dataset = build_dataset(test_cfg)
     metadata = attach_legacy_infos(dataset, test_cfg.ann_file)
     print(f'attached legacy metadata: {metadata}')
@@ -354,31 +372,16 @@ def main():
         save_bev_visualization(
             outputs[args.show_index], dataset, args.show_index, metadata_by_index[args.show_index], cfg, args)
 
-    kwargs = {} if args.eval_options is None else args.eval_options
-    kwargs.setdefault('jsonfile_prefix', osp.join(
-        'test', Path(args.config).stem, time.ctime().replace(' ', '_').replace(':', '_')))
-
-    if args.format_only:
-        if args.max_samples is not None:
-            print('format-only skipped because outputs are truncated by --max-samples')
-        else:
-            dataset.format_results(outputs, **kwargs)
-
-    if args.eval:
-        if args.max_samples is not None:
-            print('dataset.evaluate skipped because outputs are truncated by --max-samples')
-        else:
-            eval_kwargs = cfg.get('evaluation', {}).copy()
-            for key in ['interval', 'tmpdir', 'start', 'gpu_collect', 'save_best', 'rule']:
-                eval_kwargs.pop(key, None)
-            eval_kwargs.update(dict(metric=args.eval, **kwargs))
-            try:
-                print(dataset.evaluate(outputs, **eval_kwargs))
-            except Exception as exc:
-                print('dataset.evaluate failed and remains pending')
-                print(f'exception type: {type(exc).__name__}')
-                print(f'exception: {exc}')
-                traceback.print_exc()
+    if args.eval or args.format_only:
+        if args.eval_options:
+            raise ValueError('--eval-options is not supported by the official nuScenes evaluation path')
+        result_path = format_nuscenes_results(outputs, dataset, cfg, args.eval_dir)
+        print(f'nuScenes result JSON: {result_path}')
+        if args.eval:
+            metrics = evaluate_nuscenes_results(result_path, dataset, args.eval_dir)
+            print(f"nuScenes {dataset.version} {metrics['eval_time']:.1f}s: "
+                  f"mAP={metrics['mean_ap']:.4f}, NDS={metrics['nd_score']:.4f}")
+            print(f"metrics summary: {Path(args.eval_dir) / 'metrics_summary.json'}")
 
     return 0
 

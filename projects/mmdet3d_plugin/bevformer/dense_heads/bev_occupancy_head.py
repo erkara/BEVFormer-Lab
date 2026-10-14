@@ -6,7 +6,11 @@ from mmdet.registry import MODELS
 
 @MODELS.register_module()
 class BEVOccupancyHead(nn.Module):
-    """Small CNN head for binary BEV occupancy/objectness logits."""
+    """Map [B, C, H, W] BEV features to [B, 1, H, W] binary logits.
+
+    ``pos_weight`` increases the BCE penalty for missed occupied cells because
+    vehicle footprints cover only a small fraction of the BEV grid.
+    """
 
     def __init__(self, in_channels=256, hidden_channels=None, pos_weight=10.0):
         super().__init__()

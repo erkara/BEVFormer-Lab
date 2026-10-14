@@ -16,7 +16,7 @@ from projects.mmdet3d_plugin.bevformer.occupancy import (
 class BEVFormerOccupancy(BEVFormer):
     """Experimental BEVFormer occupancy/objectness model.
 
-    This wrapper keeps the original BEVFormer detection model untouched with inheritance.
+    This separate detector subclass leaves the detection path unchanged.
     It reuses the image backbone/FPN and calls the existing BEVFormerHead with
     ``only_bev=True`` to run only the BEV encoder. The detection decoder and
     detection losses are not used in this model path.
@@ -74,6 +74,7 @@ class BEVFormerOccupancy(BEVFormer):
         return bev_feats, layout
 
     def _build_occupancy_targets(self, gt_bboxes_3d, gt_labels_3d, device, dtype):
+        """Rasterize each sample's vehicle boxes and stack masks as [B, 1, H, W]."""
         targets = []
         for boxes, labels in zip(gt_bboxes_3d, gt_labels_3d):
             if torch.is_tensor(labels):
@@ -104,13 +105,10 @@ class BEVFormerOccupancy(BEVFormer):
                           gt_bboxes_ignore=None,
                           prev_bev=None,
                           return_occ_debug=False):
-        #original BEVFormer head from the tiny config, just return B_{t}, no detection run
+        """Run only the BEV encoder, then predict and supervise occupancy."""
         raw_bev_embed = self.pts_bbox_head(pts_feats, img_metas, prev_bev, only_bev=True)
-        # [B,HW,C] --> [B,H,W,C] --> [B,C,H,W]
         bev_feats, raw_layout = self._bev_embed_to_feature_map(raw_bev_embed)
-        # shape: (B, 1, 50, 50)
         logits = self.occupancy_head(bev_feats)
-        # shape: (B, 1, 50, 50)
         targets = self._build_occupancy_targets(gt_bboxes_3d, gt_labels_3d, logits.device, logits.dtype)
         losses = self.occupancy_head.loss(logits, targets)
 
@@ -140,12 +138,19 @@ class BEVFormerOccupancy(BEVFormer):
                       img_depth=None,
                       img_mask=None,
                       return_occ_debug=False):
+        """Use earlier camera frames for temporal BEV, then train on the last frame.
+
+        ``img`` is [B, queue, cameras, channels, height, width]; GT belongs to
+        the queue's final frame. This mirrors the temporal detection path.
+        """
         len_queue = img.size(1)
         prev_img = img[:, :-1, ...]
         img = img[:, -1, ...]
 
         was_training = self.training
         prev_img_metas = copy.deepcopy(img_metas)
+        # The inherited history encoder switches model mode internally; restore
+        # eval mode for validation/inference after building the temporal BEV.
         prev_bev = self.obtain_history_bev(prev_img, prev_img_metas)
         if not was_training:
             self.eval()

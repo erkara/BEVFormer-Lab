@@ -43,7 +43,7 @@ def register_runtime_compat_transforms():
 
     @TRANSFORMS.register_module(name="LoadMultiViewImageFromFiles", force=True)
     class LoadMultiViewImageFromFilesCompat:
-        def __init__(self, to_float32=False, color_type="color", *args, **kwargs):
+        def __init__(self, to_float32=False, color_type="unchanged", *args, **kwargs):
             self.to_float32 = to_float32
             self.color_type = color_type
 
@@ -59,6 +59,7 @@ def register_runtime_compat_transforms():
             results["img_shape"] = [img.shape for img in imgs]
             results["ori_shape"] = [img.shape for img in imgs]
             results["pad_shape"] = [img.shape for img in imgs]
+            results["scale_factor"] = 1.0
             num_channels = 1 if imgs[0].ndim < 3 else imgs[0].shape[2]
             results["img_norm_cfg"] = dict(
                 mean=np.zeros(num_channels, dtype=np.float32),

@@ -35,11 +35,13 @@ class CustomNuScenesDataset(NuScenesDataset):
     This datset only add camera intrinsics and extrinsics to the results.
     """
 
-    def __init__(self, queue_length=4, bev_size=(200, 200), overlap_test=False, *args, **kwargs):
+    def __init__(self, queue_length=4, bev_size=(200, 200), overlap_test=False,
+                 deterministic_history=False, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.queue_length = queue_length
         self.overlap_test = overlap_test
         self.bev_size = bev_size
+        self.deterministic_history = deterministic_history
         
     def prepare_train_data(self, index):
         """
@@ -51,8 +53,13 @@ class CustomNuScenesDataset(NuScenesDataset):
         """
         queue = []
         index_list = list(range(index-self.queue_length, index))
-        random.shuffle(index_list)
-        index_list = sorted(index_list[1:])
+        if self.deterministic_history:
+            # Validation keeps the nearest preceding frames; training retains
+            # BEVFormer's random history selection below.
+            index_list = index_list[1:]
+        else:
+            random.shuffle(index_list)
+            index_list = sorted(index_list[1:])
         index_list.append(index)
         for i in index_list:
             i = max(0, i)

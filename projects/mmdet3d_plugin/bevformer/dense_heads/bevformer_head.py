@@ -27,7 +27,6 @@ from mmdet.utils import reduce_mean
 from mmdet.models.layers.transformer import inverse_sigmoid
 from mmdet.registry import MODELS, TASK_UTILS
 from mmdet.models.dense_heads import DETRHead
-from mmdet.models.task_modules import build_bbox_coder
 
 HEADS = MODELS
 
@@ -98,7 +97,7 @@ class BEVFormerHead(DETRHead):
         positional_encoding = kwargs.pop('positional_encoding')
         self.transformer = SimpleNamespace(decoder=transformer.decoder)
 
-        self.bbox_coder = build_bbox_coder(bbox_coder)
+        self.bbox_coder = TASK_UTILS.build(bbox_coder)
         self.pc_range = self.bbox_coder.pc_range
         self.real_w = self.pc_range[3] - self.pc_range[0]
         self.real_h = self.pc_range[4] - self.pc_range[1]

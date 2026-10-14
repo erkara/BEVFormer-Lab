@@ -182,7 +182,7 @@ class PerceptionTransformer(BaseModule):
         shift_y = shift_y * self.use_shift
         shift_x = shift_x * self.use_shift
         shift = bev_queries.new_tensor(
-            [shift_x, shift_y]).permute(1, 0)  # xy, bs -> bs, xy
+            np.stack((shift_x, shift_y), axis=-1))  # [batch, xy]
 
         if prev_bev is not None:
             if prev_bev.shape[1] == bev_h * bev_w:
@@ -201,7 +201,7 @@ class PerceptionTransformer(BaseModule):
 
         # add can bus signals
         can_bus = bev_queries.new_tensor(
-            [each['can_bus'] for each in kwargs['img_metas']])  # [:, :]
+            np.stack([each['can_bus'] for each in kwargs['img_metas']]))  # [:, :]
         can_bus = self.can_bus_mlp(can_bus)[None, :, :]
         bev_queries = bev_queries + can_bus * self.use_can_bus
 
