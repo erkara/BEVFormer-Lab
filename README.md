@@ -1,8 +1,15 @@
 # BEVFormer: A Working OpenMMLab Port
 
-[BEVFormer](https://github.com/fundamentalvision/BEVFormer) is an influential
-camera-based 3D perception model, but its original code is difficult to run
-with current dependencies. This fork brings BEVFormer
+Over the last year or so, I have been reviewing the fundamentals of the
+AV/robotics stack (sensing, perception, planning, and control), with a special
+focus on the recent unified perception ideas. To experiment with an existing
+method, I looked into [BEVFormer](https://github.com/fundamentalvision/BEVFormer),
+a well-known camera-based 3D perception model. Its original code is pretty
+difficult to run with current dependencies, something I have also seen in
+the repository's issues. So I wanted to give it a try and see whether I could
+run the same pipeline on the modern OpenMMLab stack.
+
+This fork brings BEVFormer
 Tiny training and inference to a modern OpenMMLab stack. With the original
 Tiny checkpoint, its full nuScenes validation scores closely match the
 original release. It also adds an experimental 2D BEV occupancy path for
